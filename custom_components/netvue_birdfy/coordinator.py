@@ -15,7 +15,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util, slugify
 
 from .api import NetvueAuthError, NetvueClient, NetvueError
-from .const import DOMAIN, LINK_BATCH, LOOKBACK, SCAN_INTERVAL
+from .const import CONF_FOLDER, DEFAULT_FOLDER, DOMAIN, LINK_BATCH, LOOKBACK, SCAN_INTERVAL
 
 if TYPE_CHECKING:
     from . import BirdfyConfigEntry
@@ -90,6 +90,7 @@ class BirdfyCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]):
         media_dirs = hass.config.media_dirs
         media = media_dirs.get("local") or next(iter(media_dirs.values()), None)
         self.media_dir = Path(media or hass.config.path("media"))
+        self.archive_dir = self.media_dir / entry.options.get(CONF_FOLDER, DEFAULT_FOLDER)
         self._backfilled = False
 
     def media_source_uri(self, path: Path) -> str:
@@ -122,7 +123,7 @@ class BirdfyCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]):
 
     async def _sync_device(self, device: dict[str, Any]) -> DeviceState:
         name = device.get("deviceName") or device["serialNumber"]
-        state = DeviceState(device=device, folder=self.media_dir / DOMAIN / slugify(name))
+        state = DeviceState(device=device, folder=self.archive_dir / slugify(name))
 
         # First poll after startup backfills everything the cloud still has.
         start_ms = None

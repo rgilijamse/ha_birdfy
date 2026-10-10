@@ -32,8 +32,12 @@ Per feeder:
 | `image.<feeder>_last_snapshot` | Snapshot of the newest event, served from the local copy |
 | `event.<feeder>_visit` | Fires once for every new event (not for the backfill after a restart) |
 
-Files are stored as `<media>/netvue_birdfy/<feeder>/YYYY-MM-DD/HHMMSS_<alarmId>.{mp4,jpg}`,
-using Home Assistant's local time. A file on disk is the record that an event
+Files are stored as `<media>/<folder>/<feeder>/YYYY-MM-DD/HHMMSS_<alarmId>.{mp4,jpg}`,
+using Home Assistant's local time. `<folder>` is set during setup (default
+`netvue_birdfy`) and can be changed under Configure. Network storage added to
+Home Assistant for media is mounted inside the media folder, so a share named
+`cctv` is used with a folder like `cctv/birdfy`. Changing the folder does not
+move existing files. A file on disk is the record that an event
 was archived; there is no other state. Nothing is deleted automatically.
 
 The integration polls every 5 minutes and looks back 3 days (how long the

@@ -3,9 +3,12 @@ from datetime import timedelta
 
 DOMAIN = "netvue_birdfy"
 
+CONF_FOLDER = "folder"
 CONF_PASSWORD_MD5 = "password_md5"
 CONF_UDID = "udid"
 CONF_USERID = "userid"
+
+DEFAULT_FOLDER = DOMAIN
 
 SCAN_INTERVAL = timedelta(minutes=5)
 # Download links stay valid for 3 days; look back that far on every poll so a

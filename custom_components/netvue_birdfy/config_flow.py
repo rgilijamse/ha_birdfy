@@ -2,11 +2,17 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from pathlib import PurePosixPath
 from typing import Any
 
 import voluptuous as vol
 
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlowWithReload,
+)
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD, CONF_TOKEN
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
@@ -16,15 +22,34 @@ from homeassistant.helpers.selector import (
 )
 
 from .api import NetvueAuthError, NetvueClient, NetvueError, hash_password, new_udid
-from .const import CONF_PASSWORD_MD5, CONF_UDID, CONF_USERID, DOMAIN
+from .const import (
+    CONF_FOLDER,
+    CONF_PASSWORD_MD5,
+    CONF_UDID,
+    CONF_USERID,
+    DEFAULT_FOLDER,
+    DOMAIN,
+)
 
 PASSWORD_SELECTOR = TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD))
+
+
+def clean_folder(folder: str) -> str | None:
+    """Return a safe path relative to the media folder, or None if it escapes it."""
+    path = PurePosixPath(folder.strip().strip("/"))
+    if not path.parts or ".." in path.parts:
+        return None
+    return path.as_posix()
 
 
 class BirdfyConfigFlow(ConfigFlow, domain=DOMAIN):
     """Log in with a Birdfy account; only the md5 of the password is stored."""
 
     VERSION = 1
+
+    @staticmethod
+    def async_get_options_flow(config_entry: ConfigEntry) -> BirdfyOptionsFlow:
+        return BirdfyOptionsFlow()
 
     async def _login(self, email: str, password_md5: str, udid: str) -> NetvueClient:
         client = NetvueClient(async_get_clientsession(self.hass), email, password_md5, udid)
@@ -39,13 +64,18 @@ class BirdfyConfigFlow(ConfigFlow, domain=DOMAIN):
             email = user_input[CONF_EMAIL].strip()
             password_md5 = hash_password(user_input[CONF_PASSWORD])
             udid = new_udid()
-            try:
-                client = await self._login(email, password_md5, udid)
-            except NetvueAuthError:
-                errors["base"] = "invalid_auth"
-            except NetvueError:
-                errors["base"] = "cannot_connect"
+            folder = clean_folder(user_input[CONF_FOLDER])
+            client = None
+            if folder is None:
+                errors[CONF_FOLDER] = "invalid_folder"
             else:
+                try:
+                    client = await self._login(email, password_md5, udid)
+                except NetvueAuthError:
+                    errors["base"] = "invalid_auth"
+                except NetvueError:
+                    errors["base"] = "cannot_connect"
+            if client:
                 await self.async_set_unique_id(client.userid)
                 self._abort_if_unique_id_configured()
                 return self.async_create_entry(
@@ -57,11 +87,16 @@ class BirdfyConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_TOKEN: client.token,
                         CONF_USERID: client.userid,
                     },
+                    options={CONF_FOLDER: folder},
                 )
         return self.async_show_form(
             step_id="user",
             data_schema=vol.Schema(
-                {vol.Required(CONF_EMAIL): str, vol.Required(CONF_PASSWORD): PASSWORD_SELECTOR}
+                {
+                    vol.Required(CONF_EMAIL): str,
+                    vol.Required(CONF_PASSWORD): PASSWORD_SELECTOR,
+                    vol.Required(CONF_FOLDER, default=DEFAULT_FOLDER): str,
+                }
             ),
             errors=errors,
         )
@@ -97,5 +132,25 @@ class BirdfyConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="reauth_confirm",
             data_schema=vol.Schema({vol.Required(CONF_PASSWORD): PASSWORD_SELECTOR}),
             description_placeholders={"email": entry.data[CONF_EMAIL]},
+            errors=errors,
+        )
+
+
+class BirdfyOptionsFlow(OptionsFlowWithReload):
+    """Change where the archive is stored; existing files are not moved."""
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            if (folder := clean_folder(user_input[CONF_FOLDER])) is None:
+                errors[CONF_FOLDER] = "invalid_folder"
+            else:
+                return self.async_create_entry(data={CONF_FOLDER: folder})
+        current = self.config_entry.options.get(CONF_FOLDER, DEFAULT_FOLDER)
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema({vol.Required(CONF_FOLDER, default=current): str}),
             errors=errors,
         )
