@@ -1,0 +1,34 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Birdfy account",
+        "description": "Log in with the account you use in the Birdfy app. Only a hash of the password is stored.",
+        "data": { "email": "Email", "password": "Password" }
+      },
+      "reauth_confirm": {
+        "title": "Log in again",
+        "description": "The Birdfy login for {email} stopped working. Enter the password again.",
+        "data": { "password": "Password" }
+      }
+    },
+    "error": {
+      "invalid_auth": "Email or password is wrong.",
+      "cannot_connect": "Could not reach the Birdfy cloud."
+    },
+    "abort": {
+      "already_configured": "This Birdfy account is already set up.",
+      "reauth_successful": "Logged in again."
+    }
+  },
+  "entity": {
+    "sensor": { "last_visit": { "name": "Last visit" } },
+    "image": { "last_snapshot": { "name": "Last snapshot" } },
+    "event": {
+      "visit": {
+        "name": "Visit",
+        "state_attributes": { "event_type": { "state": { "visit": "Visit" } } }
+      }
+    }
+  }
+}

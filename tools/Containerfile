@@ -1,0 +1,15 @@
+# Test/dev image: Home Assistant test harness + aiohttp for the CLI.
+#   podman build -t ha-birdfy-test -f tools/Containerfile tools/
+#   podman run --rm -v "$PWD":/src:ro ha-birdfy-test pytest
+#   podman run --rm -it -v "$PWD":/src:ro -v ~/.config/birdfy:/root/.config/birdfy \
+#       ha-birdfy-test python tools/birdfy_cli.py events 5
+FROM docker.io/library/python:3.14-slim
+
+# 0.13.367 pins homeassistant==2026.9.4 (the version running at home).
+ARG HARNESS_VERSION=0.13.367
+RUN pip install --no-cache-dir "pytest-homeassistant-custom-component==${HARNESS_VERSION}"
+
+WORKDIR /src
+# Keep caches out of the read-only source mount.
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTEST_ADDOPTS="-p no:cacheprovider"

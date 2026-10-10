@@ -1,0 +1,14 @@
+{
+  "domain": "netvue_birdfy",
+  "name": "Netvue Birdfy",
+  "codeowners": ["@rgilijamse"],
+  "config_flow": true,
+  "dependencies": ["media_source"],
+  "documentation": "https://github.com/rgilijamse/ha_birdfy",
+  "integration_type": "hub",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/rgilijamse/ha_birdfy/issues",
+  "loggers": ["custom_components.netvue_birdfy"],
+  "requirements": [],
+  "version": "0.1.0"
+}
