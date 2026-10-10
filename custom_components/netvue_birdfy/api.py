@@ -67,6 +67,7 @@ class NetvueClient:
         self.token = token
         self.userid = userid
         self._on_token = on_token
+        self._addx: dict[str, Any] | None = None
 
     async def login(self) -> None:
         """Log in and store a new session token."""
@@ -186,6 +187,57 @@ class NetvueClient:
             for item in data.get("eventList", [])
             if item.get("alarmId")
         }
+
+    async def get_bird_counts(self, device: dict[str, Any]) -> list[dict[str, Any]]:
+        """Return [{tag, group, count}] for the events the cloud still holds."""
+        region = device.get("region") or DEFAULT_REGION
+        data = await self._request(
+            "GET",
+            f"https://{region}-api2.nvts.co/birdData/eventCount",
+            params={"serialnumber": device["serialNumber"]},
+        )
+        return data.get("birdCountList", [])
+
+    async def get_species_summary(self, region: str = DEFAULT_REGION) -> dict[str, Any]:
+        """Return {total, birds: [{birdName, createTime, coverImageUrl}]} for the account."""
+        return await self._request(
+            "GET", f"https://{region}-api2.nvts.co/birdData/summary", params={"pageSize": 100}
+        )
+
+    async def get_addx_attributes(self, device: dict[str, Any]) -> dict[str, Any]:
+        """Return Addx (VicoHome) real-time attributes: battery, signal, SD card, ...
+
+        Only for devices with onAddx; the Addx token comes from the Netvue API.
+        """
+        region = device.get("region") or DEFAULT_REGION
+        for force in (False, True):
+            if self._addx is None or force:
+                self._addx = await self._request(
+                    "GET",
+                    f"https://{region}-api2.nvts.co/addx/token/v2",
+                    params={"region": region, **({"forceUpdate": "true"} if force else {})},
+                )
+            body = {
+                "serialNumber": device["addxSn"],
+                "returnFixedAttributes": False,
+                "returnModifiableAttributes": False,
+                "returnRealTimeAttributes": True,
+                "countryNo": self._addx.get("countryNo"),
+                "language": self._addx.get("language"),
+            }
+            try:
+                async with self._session.post(
+                    f"{self._addx['endpoint']}/device/getDeviceAttributes",
+                    json=body,
+                    headers={"Authorization": self._addx["token"], "User-Agent": USER_AGENT},
+                    timeout=TIMEOUT,
+                ) as resp:
+                    data = await resp.json(content_type=None)
+            except (aiohttp.ClientError, TimeoutError, ValueError) as err:
+                raise NetvueError(f"Addx attributes: {err}") from err
+            if data.get("result") == 0:
+                return (data.get("data") or {}).get("realTimeAttributes") or {}
+        raise NetvueError(f"Addx attributes: result={data.get('result')} msg={data.get('msg')}")
 
     async def fetch_bytes(self, url: str) -> bytes:
         """Download a pre-signed media URL (no auth headers)."""

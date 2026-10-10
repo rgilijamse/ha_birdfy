@@ -49,6 +49,10 @@ class DeviceState:
     folder: Path
     last_visit: Visit | None = None
     new_visits: list[Visit] = field(default_factory=list)
+    # Optional extras; None when the call failed or the device lacks them.
+    attributes: dict[str, Any] | None = None
+    bird_counts: list[dict[str, Any]] | None = None
+    species: dict[str, Any] | None = None
 
     @property
     def serial(self) -> str:
@@ -62,6 +66,7 @@ class DeviceState:
             manufacturer="Netvue",
             model=self.device.get("productCode"),
             serial_number=self.serial,
+            sw_version=(self.attributes or {}).get("firmwareId"),
         )
         if mac := self.device.get("ethMacAddress"):
             info["connections"] = {(CONNECTION_NETWORK_MAC, mac)}
@@ -92,6 +97,7 @@ class BirdfyCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]):
         self.media_dir = Path(media or hass.config.path("media"))
         self.archive_dir = self.media_dir / entry.options.get(CONF_FOLDER, DEFAULT_FOLDER)
         self._backfilled = False
+        self._failed_extras: set[str] = set()
 
     def media_source_uri(self, path: Path) -> str:
         """Return the media-source URI for an archived file."""
@@ -100,9 +106,18 @@ class BirdfyCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]):
     async def _async_update_data(self) -> dict[str, DeviceState]:
         try:
             devices = await self.client.get_devices()
+            species = await self._extra("species", self.client.get_species_summary)
             states = {}
             for device in devices:
                 state = await self._sync_device(device)
+                state.species = species
+                state.bird_counts = await self._extra(
+                    "bird counts", self.client.get_bird_counts, device
+                )
+                if device.get("onAddx") and device.get("addxSn"):
+                    state.attributes = await self._extra(
+                        "device attributes", self.client.get_addx_attributes, device
+                    )
                 states[state.serial] = state
         except NetvueAuthError as err:
             raise ConfigEntryAuthFailed(str(err)) from err
@@ -110,6 +125,22 @@ class BirdfyCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]):
             raise UpdateFailed(str(err)) from err
         self._backfilled = True
         return states
+
+    async def _extra(self, what: str, func, *args):
+        """Call an optional endpoint; log a failure once instead of failing the poll."""
+        try:
+            result = await func(*args)
+        except NetvueAuthError:
+            raise
+        except NetvueError as err:
+            if what not in self._failed_extras:
+                _LOGGER.warning("Could not fetch %s: %s", what, err)
+                self._failed_extras.add(what)
+            return None
+        if what in self._failed_extras:
+            _LOGGER.info("Fetching %s works again", what)
+            self._failed_extras.discard(what)
+        return result
 
     def _visit(self, folder: Path, event: dict[str, Any]) -> Visit:
         when = dt_util.as_local(dt_util.utc_from_timestamp(event["alertTime"] / 1000))

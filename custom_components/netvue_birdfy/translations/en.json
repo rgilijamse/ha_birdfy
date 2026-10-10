@@ -35,6 +35,23 @@
     "sensor": {
       "last_visit": {
         "name": "Last visit"
+      },
+      "battery": {
+        "name": "Battery"
+      },
+      "signal_strength": {
+        "name": "Signal strength"
+      },
+      "sd_card_free": {
+        "name": "SD card free"
+      },
+      "recent_species": {
+        "name": "Recent species",
+        "unit_of_measurement": "species"
+      },
+      "species_seen": {
+        "name": "Species seen",
+        "unit_of_measurement": "species"
       }
     },
     "image": {
@@ -52,6 +69,11 @@
             }
           }
         }
+      }
+    },
+    "binary_sensor": {
+      "online": {
+        "name": "Online"
       }
     }
   },

@@ -18,7 +18,13 @@ DEVICE = {
     "region": "eu-central-1",
     "productCode": "L14",
     "ethMacAddress": "b4:61:e9:00:00:01",
+    "onAddx": True,
+    "addxSn": "addx-sn-1",
 }
+ADDX_TOKEN_URL = "https://eu-central-1-api2.nvts.co/addx/token/v2"
+ADDX_ATTRS_URL = "https://api-eu.example/device/getDeviceAttributes"
+BIRD_COUNT_URL = "https://eu-central-1-api2.nvts.co/birdData/eventCount"
+SPECIES_URL = "https://eu-central-1-api2.nvts.co/birdData/summary"
 # 2026-10-06 16:41:25 and 13:43:04 Amsterdam time.
 EVENT_NEW = "AAAnewest"
 EVENT_OLD = "AAAolder"
@@ -57,6 +63,17 @@ class FakeCloud:
         self.mock = mock
         self.login_response = {"ret": 0, "token": "tok-1", "userID": 1234567}
         self.devices_status = 200
+        self.addx_result = 0
+        self.realtime = {
+            "online": 1,
+            "batteryLevel": 87,
+            "isCharging": 2,
+            "chargingMode": 3,
+            "signalStrength": -56,
+            "firmwareId": "1.9.10",
+            "sdCard": {"total": 59606, "used": 15341, "free": 44265},
+        }
+        self.bird_counts_status = 200
         self.events = [
             make_event(EVENT_NEW, 1791297685606),
             make_event(EVENT_OLD, 1791286984583),
@@ -68,6 +85,26 @@ class FakeCloud:
         self.mock.post(LOGIN_URL, json=self.login_response)
         self.mock.get(DEVICES_URL, status=self.devices_status, json={"devices": [DEVICE]})
         self.mock.get(EVENTS_URL, json={"startKey": "", "events": self.events})
+        self.mock.get(ADDX_TOKEN_URL, json={
+            "token": "Bearer addx", "endpoint": "https://api-eu.example",
+            "countryNo": "us", "language": "en",
+        })
+        self.mock.post(ADDX_ATTRS_URL, json={
+            "result": self.addx_result, "msg": "Success",
+            "data": {"realTimeAttributes": self.realtime},
+        })
+        self.mock.get(BIRD_COUNT_URL, status=self.bird_counts_status, json={"birdCountList": [
+            {"tag": "AllBird", "group": 1, "count": 9},
+            {"tag": "Dunnock", "group": 1, "count": 4},
+            {"tag": "Great Tit", "group": 1, "count": 3},
+            {"tag": "Bird", "group": 1, "count": 1},
+            {"tag": "AllAnimal", "group": 2, "count": 2},
+            {"tag": "Animal", "group": 2, "count": 2},
+        ]})
+        self.mock.get(SPECIES_URL, json={"total": 2, "birds": [
+            {"createTime": 1779459266438, "birdName": "Black Redstart", "coverImageUrl": ""},
+            {"createTime": 1773067649046, "birdName": "Dunnock", "coverImageUrl": ""},
+        ]})
         self.mock.post(
             DOWNLOAD_LINK_URL,
             json={

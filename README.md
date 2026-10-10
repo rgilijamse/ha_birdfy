@@ -17,8 +17,10 @@ Early development, tested against one original Birdfy Feeder (product code
 `L14`) on the `eu-central-1` region.
 
 - [x] Archive clips and snapshots, entities for the latest visit
-- [ ] Species names (the AI result is not in the event list; endpoint unknown)
-- [ ] Battery level (not in the device list; likely AWS IoT shadow or Addx API)
+- [x] Battery, signal, SD card, online (Addx/VicoHome API, `onAddx` devices only)
+- [x] Species counts and the account's species list
+- [ ] Species per clip (events carry only a `labelMask`; endpoint not found yet)
+- [ ] Meaning of the `isCharging` / `chargingMode` codes
 - [ ] Snapshot gallery card
 - [ ] Optional retention / cleanup
 
@@ -31,6 +33,16 @@ Per feeder:
 | `sensor.<feeder>_last_visit` | Time of the newest event; attributes `video` and `snapshot` are `media-source://` URIs |
 | `image.<feeder>_last_snapshot` | Snapshot of the newest event, served from the local copy |
 | `event.<feeder>_visit` | Fires once for every new event (not for the backfill after a restart) |
+| `sensor.<feeder>_battery` | Battery %; raw `is_charging` and `charging_mode` codes as attributes |
+| `sensor.<feeder>_signal_strength` | WiFi signal in dBm (diagnostic) |
+| `sensor.<feeder>_sd_card_free` | Free space on the SD card (diagnostic); total and used as attributes |
+| `binary_sensor.<feeder>_online` | Whether the cloud sees the feeder as connected (diagnostic) |
+| `sensor.<feeder>_recent_species` | Number of species among the events the cloud still holds; `counts` per species |
+| `sensor.<feeder>_species_seen` | Species ever recorded on the account; `species` list with first-seen dates |
+
+Battery, signal, SD card and online come from the Addx (VicoHome) platform and
+only exist for feeders that report `onAddx`. If one of these extra calls fails,
+its entities go unavailable but archiving carries on.
 
 Files are stored as `<media>/<folder>/<feeder>/YYYY-MM-DD/HHMMSS_<alarmId>.{mp4,jpg}`,
 using Home Assistant's local time. `<folder>` is set during setup (default
@@ -115,6 +127,14 @@ podman run --rm -v "$PWD":/src:ro -v ~/.config/birdfy:/root/.config/birdfy \
 | `GET localweb.nvts.co/v1/devices/v3` | Devices: `serialNumber`, `deviceName`, `region`, `productCode` |
 | `GET {region}-api2.nvts.co/devices/{sn}/events` | `limit`, `reverse=1`, `startTime`/`endTime` (ms), paged with `startKey` |
 | `POST localapi2.nvts.co/event/downloadLink` | Pre-signed MP4 and JPG URLs per `alarmId`, valid for 3 days |
+
+| `GET {region}-api2.nvts.co/birdData/eventCount?serialnumber=` | Counts per species tag (`AllBird`/`Bird`/`Animal` are totals or unidentified) |
+| `GET {region}-api2.nvts.co/birdData/summary?pageSize=` | Species ever recorded on the account |
+| `GET {region}-api2.nvts.co/addx/token/v2?region=` | Addx bearer token and API endpoint (e.g. `https://api-eu.vicohome.io`) |
+| `POST <addx endpoint>/device/getDeviceAttributes` | `{serialNumber: addxSn, returnRealTimeAttributes: true}` → battery, signal, SD card |
+
+Devices with `onAddx` do not use the AWS IoT shadow, even though
+`v1/sts/client?type=1&area=global&groupId=` hands out credentials for it.
 
 Signed requests use HMAC-SHA256 headers (`x-nvs-signature`, `x-nvs-time`,
 `x-nvs-ucid`, `x-nvs-udid`, `x-nvs-userid`); see `api.py`.

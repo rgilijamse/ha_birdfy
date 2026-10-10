@@ -10,7 +10,7 @@ from .api import NetvueClient
 from .const import CONF_PASSWORD_MD5, CONF_UDID, CONF_USERID
 from .coordinator import BirdfyCoordinator
 
-PLATFORMS = [Platform.EVENT, Platform.IMAGE, Platform.SENSOR]
+PLATFORMS = [Platform.BINARY_SENSOR, Platform.EVENT, Platform.IMAGE, Platform.SENSOR]
 
 type BirdfyConfigEntry = ConfigEntry[BirdfyCoordinator]
 
