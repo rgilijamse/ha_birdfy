@@ -36,6 +36,8 @@ class VisitEvent(BirdfyEntity, EventEntity):
                 {
                     "alarm_id": visit.alarm_id,
                     "time": visit.time.isoformat(),
+                    "species": visit.species,
+                    "detected": visit.detected,
                     "video": self.coordinator.media_source_uri(visit.video),
                     "snapshot": self.coordinator.media_source_uri(visit.snapshot),
                 },

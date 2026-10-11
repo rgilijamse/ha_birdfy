@@ -43,6 +43,8 @@ async def test_entities(hass, entry, cloud) -> None:
     ids = {e.unique_id: e.entity_id for e in er.async_entries_for_config_entry(ent_reg, entry.entry_id)}
     sensor = hass.states.get(ids["5000000000000001_last_visit"])
     assert sensor.state == "2026-10-06T14:41:25+00:00"
+    assert sensor.attributes["species"] == "Dunnock"
+    assert sensor.attributes["detected"] == ["bird"]
     assert sensor.attributes["video"] == (
         f"media-source://media_source/local/netvue_birdfy/voederkastje/2026-10-06/164125_{EVENT_NEW}.mp4"
     )
@@ -121,11 +123,14 @@ async def test_addx_and_species_sensors(hass, entry, cloud) -> None:
     await setup(hass, entry)
     battery = _state(hass, "battery")
     assert battery.state == "87"
-    assert battery.attributes["is_charging"] == 2
+    assert battery.attributes["charging_state"] == "full"
+    assert battery.attributes["charging_mode"] == 3
     assert _state(hass, "signal_strength").state == "-56"
     sd = _state(hass, "sd_card_free")
     assert float(sd.state) == pytest.approx(44.265)  # MB shown as GB
     assert _state(hass, "online", "binary_sensor").state == "on"
+    assert _state(hass, "charging", "binary_sensor").state == "off"
+    assert _state(hass, "solar_power", "binary_sensor").state == "on"
 
     recent = _state(hass, "recent_species")
     assert recent.state == "2"
@@ -139,6 +144,19 @@ async def test_addx_and_species_sensors(hass, entry, cloud) -> None:
     assert device.sw_version == "1.9.10"
 
 
+@pytest.mark.parametrize(
+    ("is_charging", "mode", "state", "charging", "solar"),
+    [(1, 3, "charging", "on", "on"), (0, 0, "none", "off", "off")],
+)
+async def test_charging(hass, entry, cloud, is_charging, mode, state, charging, solar) -> None:
+    cloud.realtime.update(isCharging=is_charging, chargingMode=mode)
+    cloud.install()
+    await setup(hass, entry)
+    assert _state(hass, "battery").attributes["charging_state"] == state
+    assert _state(hass, "charging", "binary_sensor").state == charging
+    assert _state(hass, "solar_power", "binary_sensor").state == solar
+
+
 async def test_extras_failing_do_not_break_archiving(hass, entry, cloud, media_dir) -> None:
     cloud.addx_result = 5
     cloud.bird_counts_status = 500
@@ -148,5 +166,51 @@ async def test_extras_failing_do_not_break_archiving(hass, entry, cloud, media_d
     assert _state(hass, "battery").state == "unavailable"
     assert _state(hass, "recent_species").state == "unavailable"
     assert _state(hass, "online", "binary_sensor").state == "unavailable"
+    assert _state(hass, "charging", "binary_sensor").state == "unavailable"
     assert _state(hass, "species_seen").state == "2"
     assert list(media_dir.rglob("*.mp4"))
+
+
+async def test_species_search_only_when_counts_change(hass, entry, cloud) -> None:
+    from custom_components.netvue_birdfy.api import BIRD_SEARCH_URL
+
+    await setup(hass, entry)
+    coordinator = entry.runtime_data
+    assert cloud.calls(BIRD_SEARCH_URL) == 2  # Dunnock, Great Tit; not totals or "Bird"
+
+    cloud.install()
+    await coordinator.async_refresh()
+    assert cloud.calls(BIRD_SEARCH_URL) == 0
+
+    # A fresh Great Tit clip changes the counts: search again and fire with species.
+    cloud.events.insert(0, make_event("AAAfresh", 1791300000000))
+    cloud.bird_counts[2] = {"tag": "Great Tit", "group": 1, "count": 4}
+    cloud.clips["Great Tit"] = ["AAAfresh"]
+    cloud.install()
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+    assert cloud.calls(BIRD_SEARCH_URL) == 2
+    event = _state(hass, "visit", "event")
+    assert event.attributes["alarm_id"] == "AAAfresh"
+    assert event.attributes["species"] == "Great Tit"
+    assert event.attributes["detected"] == ["bird"]
+
+
+async def test_species_search_failing_keeps_archiving(hass, entry, cloud, media_dir) -> None:
+    cloud.search_status = 500
+    cloud.install()
+    await setup(hass, entry)
+    assert entry.state is ConfigEntryState.LOADED
+    assert _state(hass, "last_visit").attributes["species"] is None
+    assert _state(hass, "recent_species").state == "2"
+    assert list(media_dir.rglob("*.mp4"))
+
+
+async def test_last_visit_kept_when_lookback_is_empty(hass, entry, cloud) -> None:
+    await setup(hass, entry)
+    cloud.events = []
+    cloud.install()
+    await entry.runtime_data.async_refresh()
+    await hass.async_block_till_done()
+    assert _state(hass, "last_visit").state == "2026-10-06T14:41:25+00:00"
+    assert _state(hass, "last_snapshot", "image").state != "unknown"

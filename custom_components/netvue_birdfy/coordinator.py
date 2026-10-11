@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 import os
 from pathlib import Path
@@ -14,13 +14,28 @@ from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC, Device
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util, slugify
 
-from .api import NetvueAuthError, NetvueClient, NetvueError
+from .api import BIRD_SEARCH_MAX_DAYS, NetvueAuthError, NetvueClient, NetvueError
 from .const import CONF_FOLDER, DEFAULT_FOLDER, DOMAIN, LINK_BATCH, LOOKBACK, SCAN_INTERVAL
 
 if TYPE_CHECKING:
     from . import BirdfyConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
+
+# eventCount tags that are totals or unidentified, not species.
+NON_SPECIES_TAGS = {"AllBird", "Bird", "AllAnimal", "Animal"}
+GROUP_BIRDS = 1
+# Event labelMask bits.
+LABELS = {32: "bird", 16: "animal"}
+
+
+def species_counts(bird_counts: list[dict[str, Any]] | None) -> dict[str, int]:
+    """Return {species: clip count} from an eventCount result."""
+    return {
+        c["tag"]: c["count"]
+        for c in bird_counts or []
+        if c.get("group") == GROUP_BIRDS and c.get("tag") not in NON_SPECIES_TAGS
+    }
 
 
 @dataclass
@@ -31,6 +46,8 @@ class Visit:
     time: datetime
     video: Path
     snapshot: Path
+    detected: list[str] = field(default_factory=list)
+    species: str | None = None
 
     @property
     def has_video(self) -> bool:
@@ -98,6 +115,8 @@ class BirdfyCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]):
         self.archive_dir = self.media_dir / entry.options.get(CONF_FOLDER, DEFAULT_FOLDER)
         self._backfilled = False
         self._failed_extras: set[str] = set()
+        # serial -> (species counts the map was built from, {alarmId: species})
+        self._clip_species: dict[str, tuple[dict[str, int], dict[str, str]]] = {}
 
     def media_source_uri(self, path: Path) -> str:
         """Return the media-source URI for an archived file."""
@@ -109,11 +128,17 @@ class BirdfyCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]):
             species = await self._extra("species", self.client.get_species_summary)
             states = {}
             for device in devices:
-                state = await self._sync_device(device)
-                state.species = species
-                state.bird_counts = await self._extra(
+                bird_counts = await self._extra(
                     "bird counts", self.client.get_bird_counts, device
                 )
+                clip_species = None
+                if bird_counts is not None:
+                    clip_species = await self._extra(
+                        "species per clip", self._species_by_clip, device, bird_counts
+                    )
+                state = await self._sync_device(device, clip_species or {})
+                state.species = species
+                state.bird_counts = bird_counts
                 if device.get("onAddx") and device.get("addxSn"):
                     state.attributes = await self._extra(
                         "device attributes", self.client.get_addx_attributes, device
@@ -142,17 +167,40 @@ class BirdfyCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]):
             self._failed_extras.discard(what)
         return result
 
-    def _visit(self, folder: Path, event: dict[str, Any]) -> Visit:
+    async def _species_by_clip(
+        self, device: dict[str, Any], bird_counts: list[dict[str, Any]]
+    ) -> dict[str, str]:
+        """Return {alarmId: species}, searching again only when the species counts change."""
+        counts = species_counts(bird_counts)
+        cached = self._clip_species.get(device["serialNumber"])
+        if cached and cached[0] == counts:
+            return cached[1]
+        end = dt_util.utcnow()
+        start_ms = int((end - timedelta(days=BIRD_SEARCH_MAX_DAYS)).timestamp() * 1000)
+        end_ms = int(end.timestamp() * 1000)
+        by_clip: dict[str, str] = {}
+        for tag in counts:
+            for event in await self.client.search_bird_events(device, tag, start_ms, end_ms):
+                by_clip[event["alarmId"]] = tag
+        self._clip_species[device["serialNumber"]] = (counts, by_clip)
+        return by_clip
+
+    def _visit(self, folder: Path, event: dict[str, Any], species: str | None) -> Visit:
         when = dt_util.as_local(dt_util.utc_from_timestamp(event["alertTime"] / 1000))
         base = folder / when.strftime("%Y-%m-%d") / f"{when:%H%M%S}_{event['alarmId']}"
+        mask = event.get("labelMask") or 0
         return Visit(
             alarm_id=event["alarmId"],
             time=when,
             video=base.with_suffix(".mp4"),
             snapshot=base.with_suffix(".jpg"),
+            detected=[label for bit, label in LABELS.items() if mask & bit],
+            species=species,
         )
 
-    async def _sync_device(self, device: dict[str, Any]) -> DeviceState:
+    async def _sync_device(
+        self, device: dict[str, Any], clip_species: dict[str, str]
+    ) -> DeviceState:
         name = device.get("deviceName") or device["serialNumber"]
         state = DeviceState(device=device, folder=self.archive_dir / slugify(name))
 
@@ -163,7 +211,10 @@ class BirdfyCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]):
         events = await self.client.get_events(device, start_ms=start_ms)
         # Events not yet isReady may still lack their clip; the next poll gets them.
         ready = [ev for ev in events if ev.get("isReady")]
-        visits = {ev["alarmId"]: self._visit(state.folder, ev) for ev in ready}
+        visits = {
+            ev["alarmId"]: self._visit(state.folder, ev, clip_species.get(ev["alarmId"]))
+            for ev in ready
+        }
 
         def find_missing() -> list[dict[str, Any]]:
             return [
@@ -180,8 +231,11 @@ class BirdfyCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]):
                 if await self._download(visit, links.get(ev["alarmId"], {})) and self._backfilled:
                     state.new_visits.append(visit)
 
-        if ready:
-            state.last_visit = visits[ready[0]["alarmId"]]
+        if visits:
+            state.last_visit = max(visits.values(), key=lambda v: v.time)
+        elif self.data and (previous := self.data.get(state.serial)):
+            # Later polls only look back LOOKBACK; keep the last visit from before that.
+            state.last_visit = previous.last_visit
         state.new_visits.sort(key=lambda v: v.time)
         return state
 

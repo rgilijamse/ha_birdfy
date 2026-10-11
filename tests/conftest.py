@@ -7,7 +7,12 @@ import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.test_util.aiohttp import AiohttpClientMocker
 
-from custom_components.netvue_birdfy.api import DEVICES_URL, DOWNLOAD_LINK_URL, LOGIN_URL
+from custom_components.netvue_birdfy.api import (
+    BIRD_SEARCH_URL,
+    DEVICES_URL,
+    DOWNLOAD_LINK_URL,
+    LOGIN_URL,
+)
 from custom_components.netvue_birdfy.const import DOMAIN
 
 SERIAL = "5000000000000001"
@@ -43,9 +48,10 @@ async def media_dir(hass, tmp_path):
     return tmp_path
 
 
-def make_event(alarm_id: str, alert_ms: int, ready: bool = True) -> dict:
+def make_event(alarm_id: str, alert_ms: int, ready: bool = True, label_mask: int | None = 32) -> dict:
     return {
         "type": 56,
+        "labelMask": label_mask,
         "alarmId": alarm_id,
         "pic": f"bucket:owner/{SERIAL}/{alarm_id}/image.jpg",
         "isReady": ready,
@@ -74,6 +80,17 @@ class FakeCloud:
             "sdCard": {"total": 59606, "used": 15341, "free": 44265},
         }
         self.bird_counts_status = 200
+        self.bird_counts = [
+            {"tag": "AllBird", "group": 1, "count": 9},
+            {"tag": "Dunnock", "group": 1, "count": 4},
+            {"tag": "Great Tit", "group": 1, "count": 3},
+            {"tag": "Bird", "group": 1, "count": 1},
+            {"tag": "AllAnimal", "group": 2, "count": 2},
+            {"tag": "Animal", "group": 2, "count": 2},
+        ]
+        # Species tag -> alarmIds the bird search returns for it.
+        self.clips = {"Dunnock": [EVENT_NEW], "Great Tit": []}
+        self.search_status = 200
         self.events = [
             make_event(EVENT_NEW, 1791297685606),
             make_event(EVENT_OLD, 1791286984583),
@@ -93,14 +110,12 @@ class FakeCloud:
             "result": self.addx_result, "msg": "Success",
             "data": {"realTimeAttributes": self.realtime},
         })
-        self.mock.get(BIRD_COUNT_URL, status=self.bird_counts_status, json={"birdCountList": [
-            {"tag": "AllBird", "group": 1, "count": 9},
-            {"tag": "Dunnock", "group": 1, "count": 4},
-            {"tag": "Great Tit", "group": 1, "count": 3},
-            {"tag": "Bird", "group": 1, "count": 1},
-            {"tag": "AllAnimal", "group": 2, "count": 2},
-            {"tag": "Animal", "group": 2, "count": 2},
-        ]})
+        self.mock.get(BIRD_COUNT_URL, status=self.bird_counts_status, json={"birdCountList": self.bird_counts})
+        for tag, alarm_ids in self.clips.items():
+            self.mock.get(BIRD_SEARCH_URL, params={"tag": tag}, status=self.search_status, json={
+                "total": len(alarm_ids), "nextStartKey": "", "mediaTtl": 259200,
+                "events": [{"alarmId": a, "serialnumber": SERIAL} for a in alarm_ids],
+            })
         self.mock.get(SPECIES_URL, json={"total": 2, "birds": [
             {"createTime": 1779459266438, "birdName": "Black Redstart", "coverImageUrl": ""},
             {"createTime": 1773067649046, "birdName": "Dunnock", "coverImageUrl": ""},

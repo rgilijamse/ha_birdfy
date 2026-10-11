@@ -37,7 +37,17 @@
         "name": "Last visit"
       },
       "battery": {
-        "name": "Battery"
+        "name": "Battery",
+        "state_attributes": {
+          "charging_state": {
+            "name": "Charging state",
+            "state": {
+              "none": "Not charging",
+              "charging": "Charging",
+              "full": "Full"
+            }
+          }
+        }
       },
       "signal_strength": {
         "name": "Signal strength"
@@ -74,6 +84,12 @@
     "binary_sensor": {
       "online": {
         "name": "Online"
+      },
+      "charging": {
+        "name": "Charging"
+      },
+      "solar_power": {
+        "name": "Solar power"
       }
     }
   },

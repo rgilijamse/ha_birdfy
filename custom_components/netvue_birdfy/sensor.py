@@ -23,12 +23,12 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 
 from . import BirdfyConfigEntry
-from .coordinator import BirdfyCoordinator, DeviceState
+from .coordinator import BirdfyCoordinator, DeviceState, species_counts
 from .entity import BirdfyEntity
 
-# eventCount tags that are totals or unidentified, not species.
-NON_SPECIES_TAGS = {"AllBird", "Bird", "AllAnimal", "Animal"}
-GROUP_BIRDS = 1
+
+# Addx isCharging codes, see binary_sensor.py.
+CHARGING_STATES = {0: "none", 1: "charging", 2: "full"}
 
 
 def _attr(key: str) -> Callable[[DeviceState], Any]:
@@ -40,11 +40,7 @@ def _sd(key: str) -> Callable[[DeviceState], Any]:
 
 
 def _recent_species(state: DeviceState) -> dict[str, int]:
-    return {
-        c["tag"]: c["count"]
-        for c in state.bird_counts or []
-        if c.get("group") == GROUP_BIRDS and c.get("tag") not in NON_SPECIES_TAGS
-    }
+    return species_counts(state.bird_counts)
 
 
 def _species_list(state: DeviceState) -> list[dict[str, Any]]:
@@ -72,6 +68,8 @@ def _last_visit_attrs(coordinator: BirdfyCoordinator, state: DeviceState) -> dic
         return None
     return {
         "alarm_id": visit.alarm_id,
+        "species": visit.species,
+        "detected": visit.detected,
         "video": coordinator.media_source_uri(visit.video),
         "snapshot": coordinator.media_source_uri(visit.snapshot),
     }
@@ -91,9 +89,8 @@ SENSORS: tuple[BirdfySensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=_attr("batteryLevel"),
         available_fn=lambda s: s.attributes is not None,
-        # Raw codes until their meaning is known (seen: isCharging 2, chargingMode 3 at 100%).
         attrs_fn=lambda c, s: {
-            "is_charging": _attr("isCharging")(s),
+            "charging_state": CHARGING_STATES.get(_attr("isCharging")(s)),
             "charging_mode": _attr("chargingMode")(s),
         },
     ),

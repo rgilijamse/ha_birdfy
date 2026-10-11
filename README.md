@@ -19,9 +19,9 @@ Early development, tested against one original Birdfy Feeder (product code
 - [x] Archive clips and snapshots, entities for the latest visit
 - [x] Battery, signal, SD card, online (Addx/VicoHome API, `onAddx` devices only)
 - [x] Species counts and the account's species list
-- [ ] Species per clip (events carry only a `labelMask`; endpoint not found yet)
-- [ ] Meaning of the `isCharging` / `chargingMode` codes
-- [ ] Snapshot gallery card
+- [x] Species per clip (bird search per species tag)
+- [x] Charging and solar power (`isCharging` / `chargingMode` codes)
+- [x] Gallery (Advanced Camera Card, see below)
 - [ ] Optional retention / cleanup
 
 ## What you get
@@ -30,19 +30,33 @@ Per feeder:
 
 | Entity | What it is |
 |---|---|
-| `sensor.<feeder>_last_visit` | Time of the newest event; attributes `video` and `snapshot` are `media-source://` URIs |
+| `sensor.<feeder>_last_visit` | Time of the newest event; attributes `species`, `detected` (`bird`/`animal`), and `video`/`snapshot` as `media-source://` URIs |
 | `image.<feeder>_last_snapshot` | Snapshot of the newest event, served from the local copy |
-| `event.<feeder>_visit` | Fires once for every new event (not for the backfill after a restart) |
-| `sensor.<feeder>_battery` | Battery %; raw `is_charging` and `charging_mode` codes as attributes |
+| `event.<feeder>_visit` | Fires once for every new event (not for the backfill after a restart), with the same attributes |
+| `sensor.<feeder>_battery` | Battery %; `charging_state` (`none`/`charging`/`full`) and the raw `charging_mode` code as attributes |
+| `binary_sensor.<feeder>_charging` | On while the battery is charging (off when full or without power in) |
+| `binary_sensor.<feeder>_solar_power` | On while the solar panel supplies power |
 | `sensor.<feeder>_signal_strength` | WiFi signal in dBm (diagnostic) |
 | `sensor.<feeder>_sd_card_free` | Free space on the SD card (diagnostic); total and used as attributes |
 | `binary_sensor.<feeder>_online` | Whether the cloud sees the feeder as connected (diagnostic) |
 | `sensor.<feeder>_recent_species` | Number of species among the events the cloud still holds; `counts` per species |
 | `sensor.<feeder>_species_seen` | Species ever recorded on the account; `species` list with first-seen dates |
 
+The charging codes were worked out against a weather station's solar radiation
+sensor next to the panel: `chargingMode` is 3 while the panel supplies power and
+0 without (it switches at twilight, around 1–6 W/m²); `isCharging` is 0 without
+power in, 1 while charging and 2 when full. With a panel the battery sits at
+100% and only tops up now and then. USB power has not been tried, so its
+`chargingMode` code is unknown (`solar_power` likely turns on for it too).
+
 Battery, signal, SD card and online come from the Addx (VicoHome) platform and
 only exist for feeders that report `onAddx`. If one of these extra calls fails,
 its entities go unavailable but archiving carries on.
+
+The species of a clip comes from the cloud AI, which can lag behind the clip.
+A visit event may then fire with `species: null`; `last_visit` picks the
+species up on a later poll. Species are searched for again only when the
+species counts change, so this costs one call per species, not per poll.
 
 Files are stored as `<media>/<folder>/<feeder>/YYYY-MM-DD/HHMMSS_<alarmId>.{mp4,jpg}`,
 using Home Assistant's local time. `<folder>` is set during setup (default
@@ -88,6 +102,35 @@ actions:
              | replace('media-source://media_source/local/', '/media/local/') }}
 ```
 
+## Gallery
+
+[Advanced Camera Card](https://github.com/dermotduffy/advanced-camera-card)
+(HACS) can show the archive as a gallery without a camera entity. One tile
+per clip, with the snapshot as its thumbnail, sorted by date and time:
+
+```yaml
+type: custom:advanced-camera-card
+view:
+  default: folders
+folders:
+  - type: ha
+    title: Voederkastje
+    ha:
+      path:
+        - id: media-source://media_source/local/cctv/voederkastje  # <folder>/<feeder>
+        - parsers:
+            - type: date
+              format: yyyy-MM-dd
+        - matchers:
+            - type: title
+              regexp: \.mp4$
+          parsers:
+            - type: date
+              regexp: ^\d{6}
+              format: HHmmss
+            - type: thumbnail  # pairs x.mp4 with x.jpg
+```
+
 ## Development
 
 Tests and the CLI run in a container, so nothing gets installed on the host.
@@ -127,11 +170,14 @@ podman run --rm -v "$PWD":/src:ro -v ~/.config/birdfy:/root/.config/birdfy \
 | `GET localweb.nvts.co/v1/devices/v3` | Devices: `serialNumber`, `deviceName`, `region`, `productCode` |
 | `GET {region}-api2.nvts.co/devices/{sn}/events` | `limit`, `reverse=1`, `startTime`/`endTime` (ms), paged with `startKey` |
 | `POST localapi2.nvts.co/event/downloadLink` | Pre-signed MP4 and JPG URLs per `alarmId`, valid for 3 days |
-
 | `GET {region}-api2.nvts.co/birdData/eventCount?serialnumber=` | Counts per species tag (`AllBird`/`Bird`/`Animal` are totals or unidentified) |
 | `GET {region}-api2.nvts.co/birdData/summary?pageSize=` | Species ever recorded on the account |
+| `GET centralapi.nvts.co/v2/birddata/search` | `serialnumber`, `startTime`/`endTime` (ms, at most 30 days), `pageSize` (at most 20), `tag` (species), paged with `nextStartKey`/`startKey` → events with that species. Without `tag`: events with no species |
 | `GET {region}-api2.nvts.co/addx/token/v2?region=` | Addx bearer token and API endpoint (e.g. `https://api-eu.vicohome.io`) |
 | `POST <addx endpoint>/device/getDeviceAttributes` | `{serialNumber: addxSn, returnRealTimeAttributes: true}` → battery, signal, SD card |
+
+Event `labelMask` bits: 32 = bird, 16 = animal. `/birdData/logSummary`
+(`group=day|week`, `timezone`) came back empty for this feeder.
 
 Devices with `onAddx` do not use the AWS IoT shadow, even though
 `v1/sts/client?type=1&area=global&groupId=` hands out credentials for it.

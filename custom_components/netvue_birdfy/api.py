@@ -20,6 +20,10 @@ USER_AGENT = "Birdfy/1.19.2 (build 123960) NetvueSDK/1.6.1 Android/12"
 LOGIN_URL = "https://localweb.nvts.co/v1/users/login/v2"
 DEVICES_URL = "https://localweb.nvts.co/v1/devices/v3"
 DOWNLOAD_LINK_URL = "https://localapi2.nvts.co/event/downloadLink"
+BIRD_SEARCH_URL = "https://centralapi.nvts.co/v2/birddata/search"
+# The search rejects (INVALID_PARAM) windows over 30 days and pages over 20.
+BIRD_SEARCH_MAX_DAYS = 30
+BIRD_SEARCH_PAGE = 20
 DEFAULT_REGION = "eu-central-1"
 EVENT_TYPE_MOTION = 56
 TIMEOUT = aiohttp.ClientTimeout(total=60)
@@ -197,6 +201,35 @@ class NetvueClient:
             params={"serialnumber": device["serialNumber"]},
         )
         return data.get("birdCountList", [])
+
+    async def search_bird_events(
+        self,
+        device: dict[str, Any],
+        tag: str,
+        start_ms: int,
+        end_ms: int,
+        max_pages: int = 10,
+    ) -> list[dict[str, Any]]:
+        """Return the events the cloud AI tagged with `tag` (an eventCount tag, e.g. "Dunnock").
+
+        Without a tag the search returns only events that have no species.
+        """
+        params: dict[str, Any] = {
+            "serialnumber": device["serialNumber"],
+            "startTime": start_ms,
+            "endTime": end_ms,
+            "pageSize": BIRD_SEARCH_PAGE,
+            "tag": tag,
+        }
+        events: list[dict[str, Any]] = []
+        for _ in range(max_pages):
+            data = await self._request("GET", BIRD_SEARCH_URL, params=params)
+            events.extend(data.get("events", []))
+            start_key = data.get("nextStartKey")
+            if not start_key or start_key == params.get("startKey"):
+                break
+            params["startKey"] = start_key
+        return events
 
     async def get_species_summary(self, region: str = DEFAULT_REGION) -> dict[str, Any]:
         """Return {total, birds: [{birdName, createTime, coverImageUrl}]} for the account."""
