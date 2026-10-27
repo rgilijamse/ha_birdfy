@@ -185,6 +185,12 @@ Devices with `onAddx` do not use the AWS IoT shadow, even though
 Signed requests use HMAC-SHA256 headers (`x-nvs-signature`, `x-nvs-time`,
 `x-nvs-ucid`, `x-nvs-udid`, `x-nvs-userid`); see `api.py`.
 
+## AI disclosure
+
+This code was written with the help of AI (Claude by Anthropic), including the
+reverse engineering of the API. It was reviewed and tested against a real
+feeder.
+
 ## Credits
 
 Login and request signing are based on
